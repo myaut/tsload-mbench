@@ -1,0 +1,21 @@
+{
+	"name": "sched1",
+	"steps": {
+		"sched1": {
+			"num_steps":	20,
+			"num_requests": 200
+		}
+	},
+	"threadpools": {
+	},
+	"workloads" : {
+		"sched1" : {
+			"wltype": "sched1",
+			"threadpool": "[DEFAULT]",
+			"params": {
+				"strand": "strand:0:0:0",
+				"num_cycles": 20000000
+			}
+		}
+	}
+}

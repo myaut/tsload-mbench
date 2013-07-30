@@ -1,0 +1,13 @@
+import os
+PathJoin = os.path.join
+
+Import('env')
+
+mod = env.Clone()
+
+module = mod.Module('load', 'sched1')
+
+experiment = File('experiment.json')
+mod.Depends(module, experiment)
+mod.InstallTarget(PathJoin(mod['INSTALL_VAR'], 'mbench', 'sched1'), 
+                  experiment)
