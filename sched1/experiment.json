@@ -2,8 +2,8 @@
 	"name": "sched1",
 	"steps": {
 		"sched1": {
-			"num_steps":	20,
-			"num_requests": 200
+			"num_steps":	10,
+			"num_requests": 20
 		}
 	},
 	"threadpools": {
@@ -14,7 +14,7 @@
 			"threadpool": "[DEFAULT]",
 			"params": {
 				"strand": "strand:0:0:0",
-				"duration": 500000
+				"duration": 5000000
 			}
 		}
 	}

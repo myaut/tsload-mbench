@@ -17,6 +17,7 @@
 #include <cpuinfo.h>
 #include <cpumask.h>
 #include <schedutil.h>
+#include <etrace.h>
 
 #include <sched1.h>
 
@@ -43,6 +44,16 @@ MODEXPORT wlp_descr_t sched1_params[] = {
 		offsetof(struct sched1_params, duration) },
 	{ WLP_NULL }
 };
+
+/* a794dbe1-13fb-46fb-91a3-6a1f607e3ea1 */
+#define ETRC_GUID_MBENCH_SCHED1	{0xa794dbe1, 0x13fb, 0x46fb, {0x91, 0xa3, 0x6a, 0x1f, 0x60, 0x7e, 0x3e, 0xa1}}
+
+ETRC_DEFINE_PROVIDER(mbench__sched1, ETRC_GUID_MBENCH_SCHED1);
+
+ETRC_DEFINE_EVENT(mbench__sched1, ping__request__start, 1);
+ETRC_DEFINE_EVENT(mbench__sched1, ping__request__finish, 2);
+ETRC_DEFINE_EVENT(mbench__sched1, ping__send__pong, 3);
+ETRC_DEFINE_EVENT(mbench__sched1, pong__on__cpu, 4);
 
 module_t* self = NULL;
 
@@ -77,9 +88,12 @@ MODEXPORT int sched1_wl_config(workload_t* wl) {
 	cpumask_set(mask, strand->id);
 
 	workload = mp_malloc(sizeof(struct sched1_workload));
-	workload->done = B_FALSE;
+
+	atomic_set(&workload->done, B_FALSE);
 
 	wl->wl_private = workload;
+
+	squeue_init(&workload->sq, "sched1-sq");
 
 	event_init(&workload->notifier, "start_notifier");
 
@@ -103,6 +117,8 @@ MODEXPORT int sched1_wl_unconfig(workload_t* wl) {
 
 	if(workload) {
 		atomic_set(&workload->done, B_TRUE);
+
+		event_notify_all(&workload->notifier);
 
 		t_destroy(&workload->ping);
 		t_destroy(&workload->pong);
@@ -232,10 +248,14 @@ MODEXPORT int mod_config(module_t* mod) {
 
 	wl_type_register(mod, &sched1_wlt);
 
+	etrc_provider_init(&mbench__sched1);
+
 	return MOD_OK;
 }
 
 MODEXPORT int mod_unconfig(module_t* mod) {
+	etrc_provider_destroy(&mbench__sched1);
+
 	return MOD_OK;
 }
 
@@ -254,14 +274,20 @@ thread_result_t sched1_ping_thread(thread_arg_t arg) {
 	while(atomic_read(&workload->done) != B_TRUE) {
 		event_wait(&workload->notifier);
 
+		if(atomic_read(&workload->done) == B_TRUE)
+			break;
+
 		for(iter = 0; iter < workload->num_iterations; ++iter) {
 			/* Simulate busy working */
+			ETRC_PROBE0(mbench__sched1, ping__request__start);
 			sched1_matrix_mul(&workload->matrix);
+			ETRC_PROBE0(mbench__sched1, ping__request__finish);
 
 			/* Awake pong thread for nothing */
 			msg = mp_malloc(sizeof(int));
 			*msg = iter;
 
+			ETRC_PROBE0(mbench__sched1, ping__send__pong);
 			squeue_push(&workload->sq, (void*) msg);
 		}
 	}
@@ -285,6 +311,8 @@ thread_result_t sched1_pong_thread(thread_arg_t arg) {
 
 	while(B_TRUE) {
 		msg = squeue_pop(&workload->sq);
+
+		ETRC_PROBE0(mbench__sched1, pong__on__cpu);
 
 		if(msg == NULL) {
 			THREAD_EXIT(0);

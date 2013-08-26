@@ -1,0 +1,73 @@
+#!/usr/bin/stap
+
+/*
+	SystemTap tracer for sched1 benchmark
+	
+	set PATH before running:
+		export PATH=$PATH:../../../mod/load
+	To gather complete stacks, provide --ldd and -d options, i.e. for Debian 7:
+		 --ldd -d /lib/x86_64-linux-gnu/libpthread-2.13.so -d /opt/tsload/lib/libtscommon.so	
+*/
+
+global ping_tid, pong_tid;
+
+probe begin {
+	ping_tid = -1;
+	pong_tid = -1;
+}
+
+function print_event(event:string, task_tid:long) {
+	if(task_tid == ping_tid || task_tid == pong_tid) {
+		printdln(",", gettimeofday_ns(), event, task_tid, tid());
+		println("Kernel stack:");
+			print_backtrace();
+		println("User stack:");
+			print_ubacktrace();	
+	}
+}
+
+probe process("sched1.so").function("sched1_ping_thread") {
+	ping_tid = tid();
+	print_event("PING START", ping_tid);
+}
+
+probe process("sched1.so").function("sched1_pong_thread") {
+	pong_tid = tid();
+	print_event("PONG START", pong_tid);
+}
+
+probe scheduler.cpu_on {
+	print_event("CPU ON", task_tid(task_prev));
+}
+
+probe scheduler.wakeup {
+	print_event("WAKEUP", task_tid);
+}
+
+probe scheduler.cpu_off {
+	/* Check if state of task is runnable and
+	   determine if context switch was voluntary 
+	*/
+	if(task_state(task_prev) == 0) {
+		print_event("IVCS", task_tid(task_prev));
+	}
+	else {
+		print_event("VCS", task_tid(task_prev));
+	}
+}
+
+probe process("sched1.so").mark("ping__request__start") {
+	print_event("RQ START", tid());
+}
+
+probe process("sched1.so").mark("ping__request__finish") {
+	print_event("RQ FINISH", tid());
+}
+
+probe process("sched1.so").mark("ping__send__pong") {
+	print_event("PING SEND PONG", tid());
+}
+
+probe process("sched1.so").mark("pong__on__cpu") {
+	print_event("PONG ON CPU", tid());
+}

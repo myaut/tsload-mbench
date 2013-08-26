@@ -1,11 +1,17 @@
 import os
 import sys
 
+from SCons.Action import ActionFactory
+from SCons.Script.SConscript import SConsEnvironment
+
 PathJoin = os.path.join
 PathBaseName = os.path.basename
 PathExists = os.path.exists
 
-from SCons.Errors import StopError 
+from SCons.Errors import StopError
+
+SConsEnvironment.Chmod = ActionFactory(os.chmod,
+        lambda dest, mode: 'Chmod("%s", 0%o)' % (dest, mode)) 
 
 # Setup path to tsload
 AddOption('--with-tsload',  dest='tsload', action="store", default='',
@@ -27,6 +33,7 @@ env['TSNAME'] =  'mbench-' + env['TSVERSION']
 SConscript(PathJoin(env['TSLOADPATH'], 'SConscript.env.py'), 'env')
 SConscript(PathJoin(env['TSLOADPATH'], 'SConscript.plat.py'), 'env')
 SConscript(PathJoin(env['TSLOADPATH'], 'SConscript.install.py'), 'env')
+SConscript(PathJoin(env['TSLOADPATH'], 'SConscript.etrace.py'), 'env')
 
 # ------------
 # MODULES
