@@ -13,10 +13,21 @@
 #include <atomic.h>
 #include <syncqueue.h>
 #include <threads.h>
+#include <tstime.h>
+
+#define ELEMENT(matrix, M, i, j) matrix->M[i + j * matrix->size]
+
+typedef struct sched1_matrix {
+	int size;	/* Matrices are square to simplify algorithm */
+
+	int* A;
+	int* B;
+	int* M;
+};
 
 struct sched1_params {
 	hi_cpu_object_t* strand;
-	wlp_integer_t num_cycles;
+	ts_time_t duration;
 };
 
 struct sched1_workload {
@@ -30,6 +41,8 @@ struct sched1_workload {
 	atomic_t done;
 
 	unsigned num_iterations;
+
+	struct sched1_matrix matrix;
 };
 
 #endif /* SCHED1_H_ */

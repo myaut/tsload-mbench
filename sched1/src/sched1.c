@@ -22,6 +22,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 DECLARE_MODAPI_VERSION(MOD_API_VERSION);
 DECLARE_MOD_NAME("sched1");
@@ -34,12 +35,12 @@ MODEXPORT wlp_descr_t sched1_params[] = {
 		"strand",
 		"Strand where threads are bound",
 		offsetof(struct sched1_params, strand) },
-	{ WLP_INTEGER, WLPF_NO_FLAGS,
+	{ WLP_TIME, WLPF_NO_FLAGS,
 		WLP_NO_RANGE(),
 		WLP_NO_DEFAULT(),
-		"num_cycles",
-		"Number of cycles to be waited (not CPU cycles)",
-		offsetof(struct sched1_params, num_cycles) },
+		"duration",
+		"Duration of CPU-intensive request",
+		offsetof(struct sched1_params, duration) },
 	{ WLP_NULL }
 };
 
@@ -47,6 +48,18 @@ module_t* self = NULL;
 
 thread_result_t sched1_ping_thread(thread_arg_t arg);
 thread_result_t sched1_pong_thread(thread_arg_t arg);
+
+void sched1_matrix_init(struct sched1_matrix* matrix, unsigned int size);
+void sched1_matrix_destroy(struct sched1_matrix* matrix);
+void sched1_matrix_mul(struct sched1_matrix* matrix);
+
+void sched1_wl_training(workload_t* wl);
+
+static ts_time_t tm_abs_diff(ts_time_t a, ts_time_t b) {
+	if(a > b)
+		return a - b;
+	return b - a;
+}
 
 MODEXPORT int sched1_wl_config(workload_t* wl) {
 	struct sched1_params* sched1 = (struct sched1_params*) wl->wl_params;
@@ -80,6 +93,8 @@ MODEXPORT int sched1_wl_config(workload_t* wl) {
 
 	cpumask_destroy(mask);
 
+	sched1_wl_training(wl);
+
 	return 0;
 }
 
@@ -95,9 +110,96 @@ MODEXPORT int sched1_wl_unconfig(workload_t* wl) {
 		event_destroy(&workload->notifier);
 
 		squeue_destroy(&workload->sq, mp_free);
+
+		sched1_matrix_destroy(&workload->matrix);
 	}
 
 	return 0;
+}
+
+void sched1_wl_training(workload_t* wl) {
+	struct sched1_params* sched1 = (struct sched1_params*) wl->wl_params;
+	struct sched1_workload* workload = (struct sched1_workload*) wl->wl_private;
+
+	int size = 8;
+	int mode = 1;
+	ts_time_t start, end, t1, t2;
+	double C, D;
+
+	int 	  best_size = 0;
+	ts_time_t best_time = TS_TIME_MAX;
+	ts_time_t cur_time;
+
+	int hits = 0;
+
+	/* Determine matrix size for desired duration
+	 *
+	 * Assuming:
+	 * 		t = C * size^3 + D
+	 *
+	 * measure it for size = 8 and size = 12, then solve system of equations:
+	 * {	t = 1728 * C + D
+	 * {	t =  512 * C + D
+	 *
+	 * C =  */
+	do {
+		sched1_matrix_init(&workload->matrix, size);
+
+		start = tm_get_clock();
+		sched1_matrix_mul(&workload->matrix);
+		end = tm_get_clock();
+
+		switch(mode) {
+		case 1:
+			t1 = tm_diff(start, end);
+			size = 12;
+
+			break;
+		case 2:
+			t2 = tm_diff(start, end);
+
+			C = ((double) (t2 - t1)) / 1216.0;
+			D = ((double) t1) - (8 * C);
+
+			logmsg(LOG_INFO, "Calculated C=%f D=%f", C, D);
+
+			size = (int) cbrt(((double) sched1->duration - D) / C);
+
+			best_size = size;
+
+			break;
+		default:
+			cur_time = tm_diff(start, end);
+
+			if(mode == 3 ||
+			   tm_abs_diff(cur_time, sched1->duration) < tm_abs_diff(best_time, sched1->duration)) {
+					best_time = cur_time;
+					best_size = size;
+			}
+			else {
+				/* We didn't improve results this time */
+				++hits;
+			}
+
+			logmsg(LOG_INFO, "Desired duration %lld, size %d, real duration %lld, best duration %lld",
+					sched1->duration, size, cur_time, best_time);
+
+			if(cur_time < sched1->duration) {
+				++size;
+			}
+			else {
+				--size;
+			}
+
+			break;
+		}
+
+		++mode;
+
+		sched1_matrix_destroy(&workload->matrix);
+	} while(hits < 3);
+
+	sched1_matrix_init(&workload->matrix, best_size);
 }
 
 MODEXPORT int sched1_wl_step(workload_t* wl, unsigned num_requests) {
@@ -147,14 +249,14 @@ thread_result_t sched1_ping_thread(thread_arg_t arg) {
 	int iter = 0;
 	volatile int cycle = 0;
 
-	logmsg(LOG_INFO, "Ping thread id: %lu\n", thread->t_system_id);
+	logmsg(LOG_INFO, "Ping thread id: %lu", thread->t_system_id);
 
 	while(atomic_read(&workload->done) != B_TRUE) {
 		event_wait(&workload->notifier);
 
 		for(iter = 0; iter < workload->num_iterations; ++iter) {
 			/* Simulate busy working */
-			for(cycle = 0; cycle < sched1->num_cycles; ++cycle);
+			sched1_matrix_mul(&workload->matrix);
 
 			/* Awake pong thread for nothing */
 			msg = mp_malloc(sizeof(int));
@@ -179,7 +281,7 @@ thread_result_t sched1_pong_thread(thread_arg_t arg) {
 
 	int* msg = NULL;
 
-	logmsg(LOG_INFO, "Pong thread id: %lu\n", thread->t_system_id);
+	logmsg(LOG_INFO, "Pong thread id: %lu", thread->t_system_id);
 
 	while(B_TRUE) {
 		msg = squeue_pop(&workload->sq);
@@ -193,4 +295,50 @@ thread_result_t sched1_pong_thread(thread_arg_t arg) {
 
 	THREAD_END:
 		THREAD_FINISH(arg);
+}
+
+void sched1_matrix_init(struct sched1_matrix* matrix, unsigned int size) {
+	int i, j;
+	size_t alloc_size;
+
+	if(size == 0)
+		size = 1;
+
+	alloc_size = size * size * sizeof(int);
+
+	matrix->size = size;
+
+	matrix->A = (int*) mp_malloc(alloc_size);
+	matrix->B = (int*) mp_malloc(alloc_size);
+	matrix->M = (int*) mp_malloc(alloc_size);
+
+	for(i = 0; i < size; ++i) {
+		for(j = 0; j < size; ++j) {
+			ELEMENT(matrix, A, i, j) = i << 8 | j;
+			ELEMENT(matrix, B, i, j) = i | j << 8;
+		}
+	}
+}
+
+void sched1_matrix_destroy(struct sched1_matrix* matrix) {
+	mp_free((void*) matrix->A);
+	mp_free((void*) matrix->B);
+	mp_free((void*) matrix->M);
+}
+
+/* M = A * B
+ * O(n^3) */
+void sched1_matrix_mul(struct sched1_matrix* matrix) {
+	int i, j, k;
+
+	for(i = 0; i < matrix->size; ++i) {
+		for(j = 0; j < matrix->size; ++j) {
+			ELEMENT(matrix, M, i, j) = 0;
+			for(k = 0; k < matrix->size; ++k) {
+				ELEMENT(matrix, M, i, j) +=
+						ELEMENT(matrix, A, i, k) +
+						ELEMENT(matrix, B, k, j);
+			}
+		}
+	}
 }

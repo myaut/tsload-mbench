@@ -14,7 +14,7 @@
 			"threadpool": "[DEFAULT]",
 			"params": {
 				"strand": "strand:0:0:0",
-				"num_cycles": 20000000
+				"duration": 500000
 			}
 		}
 	}
