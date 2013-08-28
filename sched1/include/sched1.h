@@ -39,6 +39,7 @@ struct sched1_workload {
 	squeue_t sq;
 
 	atomic_t done;
+	atomic_t step;
 
 	unsigned num_iterations;
 

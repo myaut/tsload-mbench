@@ -64,7 +64,7 @@ void sched1_matrix_init(struct sched1_matrix* matrix, unsigned int size);
 void sched1_matrix_destroy(struct sched1_matrix* matrix);
 void sched1_matrix_mul(struct sched1_matrix* matrix);
 
-void sched1_wl_training(workload_t* wl);
+int sched1_wl_training(workload_t* wl);
 
 static ts_time_t tm_abs_diff(ts_time_t a, ts_time_t b) {
 	if(a > b)
@@ -78,6 +78,8 @@ MODEXPORT int sched1_wl_config(workload_t* wl) {
 	hi_cpu_object_t* strand = (hi_cpu_object_t*) sched1->strand;
 	cpumask_t* mask;
 
+	int ret;
+
 	if(strand->type != HI_CPU_STRAND) {
 		wl_notify(wl, WLS_FAIL, -1, "strand parameter should be strand object");
 
@@ -90,6 +92,7 @@ MODEXPORT int sched1_wl_config(workload_t* wl) {
 	workload = mp_malloc(sizeof(struct sched1_workload));
 
 	atomic_set(&workload->done, B_FALSE);
+	atomic_set(&workload->step, -1);
 
 	wl->wl_private = workload;
 
@@ -107,15 +110,19 @@ MODEXPORT int sched1_wl_config(workload_t* wl) {
 
 	cpumask_destroy(mask);
 
-	sched1_wl_training(wl);
+	ret = sched1_wl_training(wl);
 
-	return 0;
+	if(ret > 0)
+		wl_notify(wl, WLS_FAIL, -1, "Too many consecutive failures.");
+
+	return ret;
 }
 
 MODEXPORT int sched1_wl_unconfig(workload_t* wl) {
 	struct sched1_workload* workload = (struct sched1_workload*) wl->wl_private;
 
 	if(workload) {
+		atomic_set(&workload->step, -1);
 		atomic_set(&workload->done, B_TRUE);
 
 		event_notify_all(&workload->notifier);
@@ -133,20 +140,21 @@ MODEXPORT int sched1_wl_unconfig(workload_t* wl) {
 	return 0;
 }
 
-void sched1_wl_training(workload_t* wl) {
+int sched1_wl_training(workload_t* wl) {
 	struct sched1_params* sched1 = (struct sched1_params*) wl->wl_params;
 	struct sched1_workload* workload = (struct sched1_workload*) wl->wl_private;
 
 	int size = 8;
 	int mode = 1;
 	ts_time_t start, end, t1, t2;
-	double C, D;
+	double C, D, K;
 
 	int 	  best_size = 0;
 	ts_time_t best_time = TS_TIME_MAX;
 	ts_time_t cur_time;
 
 	int hits = 0;
+	int fails = 0;
 
 	/* Determine matrix size for desired duration
 	 *
@@ -187,24 +195,39 @@ void sched1_wl_training(workload_t* wl) {
 		default:
 			cur_time = tm_diff(start, end);
 
-			if(mode == 3 ||
-			   tm_abs_diff(cur_time, sched1->duration) < tm_abs_diff(best_time, sched1->duration)) {
-					best_time = cur_time;
-					best_size = size;
+			K = (double) sched1->duration / (double) cur_time;
+
+			if(mode == 3 && fabs(K - 1.) > 0.1) {
+				--mode;
+
+				best_size = size = (int) cbrt((K * C * pow(size, 3) + (K - 1.) * D) / C);
+
+				logmsg(LOG_WARN, "Duration error is too big: K=%f, trying with size %d", K, size);
+
+				if(++fails == 5) {
+					return fails;
+				}
 			}
 			else {
-				/* We didn't improve results this time */
-				++hits;
-			}
+				if((mode == 3
+					|| tm_abs_diff(cur_time, sched1->duration) <
+						tm_abs_diff(best_time, sched1->duration))
+					&& size != best_size) {
+						best_time = cur_time;
+						best_size = size;
+				}
+				else {
+					/* We didn't improve results this time */
+					++hits;
+				}
 
-			logmsg(LOG_INFO, "Desired duration %lld, size %d, real duration %lld, best duration %lld",
-					sched1->duration, size, cur_time, best_time);
+				logmsg(LOG_INFO, "Desired duration %lld, size %d, real duration %lld, best duration %lld",
+						sched1->duration, size, cur_time, best_time);
 
-			if(cur_time < sched1->duration) {
-				++size;
-			}
-			else {
-				--size;
+				if(cur_time < sched1->duration)
+					++size;
+				else
+					--size;
 			}
 
 			break;
@@ -216,13 +239,17 @@ void sched1_wl_training(workload_t* wl) {
 	} while(hits < 3);
 
 	sched1_matrix_init(&workload->matrix, best_size);
+
+	return 0;
 }
 
 MODEXPORT int sched1_wl_step(workload_t* wl, unsigned num_requests) {
 	struct sched1_workload* workload = (struct sched1_workload*) wl->wl_private;
 
-	workload->num_iterations = num_requests;
-	event_notify_all(&workload->notifier);
+	if(wl->wl_current_step == 0)
+		event_notify_one(&workload->notifier);
+
+	atomic_set(&workload->step, wl->wl_current_step);
 
 	return 0;
 }
@@ -266,18 +293,19 @@ thread_result_t sched1_ping_thread(thread_arg_t arg) {
 	struct sched1_workload* workload = (struct sched1_workload*) wl->wl_private;
 
 	int* msg = NULL;
-	int iter = 0;
+	int rq_count = 0;
 	volatile int cycle = 0;
+
+	long current_step = -1, step;
 
 	logmsg(LOG_INFO, "Ping thread id: %lu", thread->t_system_id);
 
+	event_wait(&workload->notifier);
+
 	while(atomic_read(&workload->done) != B_TRUE) {
-		event_wait(&workload->notifier);
+		rq_count = 0;
 
-		if(atomic_read(&workload->done) == B_TRUE)
-			break;
-
-		for(iter = 0; iter < workload->num_iterations; ++iter) {
+		while((step = atomic_read(&workload->step)) == current_step) {
 			/* Simulate busy working */
 			ETRC_PROBE0(mbench__sched1, ping__request__start);
 			sched1_matrix_mul(&workload->matrix);
@@ -285,11 +313,17 @@ thread_result_t sched1_ping_thread(thread_arg_t arg) {
 
 			/* Awake pong thread for nothing */
 			msg = mp_malloc(sizeof(int));
-			*msg = iter;
+			*msg = rq_count;
 
 			ETRC_PROBE0(mbench__sched1, ping__send__pong);
 			squeue_push(&workload->sq, (void*) msg);
+
+			++rq_count;
 		}
+
+		logmsg(LOG_INFO, "sched1: step %ld requests %d", current_step, rq_count);
+
+		current_step = step;
 	}
 
 	/* Finish pong thread */
