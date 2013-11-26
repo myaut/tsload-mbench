@@ -9,65 +9,86 @@
 		 --ldd -d /lib/x86_64-linux-gnu/libpthread-2.13.so -d /opt/tsload/lib/libtscommon.so	
 */
 
-global ping_tid, pong_tid;
+global futex;
 
-probe begin {
-	ping_tid = -1;
-	pong_tid = -1;
-}
-
-function print_event(event:string, task_tid:long) {
-	if(task_tid == ping_tid || task_tid == pong_tid) {
-		printdln(",", gettimeofday_ns(), event, task_tid, tid());
-		println("Kernel stack:");
-			print_backtrace();
-		println("User stack:");
-			print_ubacktrace();	
-	}
+function print_event(event:string, task_tid:long, rq_id:long) {
+	printdln(",", gettimeofday_ns(), event, task_tid, tid(), rq_id);
 }
 
 probe process("sched1.so").function("sched1_ping_thread") {
 	ping_tid = tid();
-	print_event("PING START", ping_tid);
+	print_event("PING START", ping_tid, 0);
 }
 
 probe process("sched1.so").function("sched1_pong_thread") {
 	pong_tid = tid();
-	print_event("PONG START", pong_tid);
+	print_event("PONG START", pong_tid, 0);
+}
+
+probe syscall.futex
+{
+	futex[tid()] = 1;
 }
 
 probe scheduler.cpu_on {
-	print_event("CPU ON", task_tid(task_prev));
+	if(cpu() != 0)
+		next;
+	print_event("CPU ON", task_tid(task_prev), 0);
 }
 
 probe scheduler.wakeup {
-	print_event("WAKEUP", task_tid);
+	if(cpu() != 0)
+		next;
+	print_event("WAKEUP", task_tid, 0);
+}
+
+probe scheduler.tick {
+	if(cpu() != 0)
+		next;
+	print_event("TICK", tid(), 0);
 }
 
 probe scheduler.cpu_off {
+	if(cpu() != 0)
+		next;
 	/* Check if state of task is runnable and
 	   determine if context switch was voluntary 
 	*/
 	if(task_state(task_prev) == 0) {
-		print_event("IVCS", task_tid(task_prev));
+		if(futex[task_tid(task_prev)]) {
+			print_event("YIELD", task_tid(task_prev), 0);
+		}
+		else {
+			print_event("IVCS", task_tid(task_prev), 0);
+		}
 	}
 	else {
-		print_event("VCS", task_tid(task_prev));
+		print_event("VCS", task_tid(task_prev), 0);
 	}
+	
+	futex[tid()] = 0;
 }
 
 probe process("sched1.so").mark("ping__request__start") {
-	print_event("RQ START", tid());
+	print_event("RQ START", tid(), $rq_id);
 }
 
 probe process("sched1.so").mark("ping__request__finish") {
-	print_event("RQ FINISH", tid());
+	print_event("RQ FINISH", tid(), $rq_id);
 }
 
 probe process("sched1.so").mark("ping__send__pong") {
-	print_event("PING SEND PONG", tid());
+	print_event("PING SEND PONG", tid(), $rq_id);
 }
 
-probe process("sched1.so").mark("pong__on__cpu") {
-	print_event("PONG ON CPU", tid());
+probe process("sched1.so").mark("pong__pop") {
+	print_event("PONG POP", tid(), $rq_id);
+}
+
+probe process("sched1.so").mark("pong__sleep") {
+	print_event("PONG SLEEP", tid(), $rq_id);
+}
+
+probe process("sched1.so").mark("pong__wakeup") {
+	print_event("PONG WAKEUP", tid(), $rq_id);
 }
