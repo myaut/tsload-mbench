@@ -1,0 +1,18 @@
+import os
+PathJoin = os.path.join
+
+target = 'http'
+
+Import('env')
+
+mod = env.Clone()
+
+module = mod.Module('load', target)
+mod.AddDeps(('lib', 'libtsagent'))
+
+experiment_json = File('experiment.json')
+
+mod.Depends(module, [experiment_json])
+
+install_path = PathJoin(mod['INSTALL_VAR'], 'mbench', target)
+mod.InstallTarget(install_path, experiment_json)

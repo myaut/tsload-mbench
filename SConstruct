@@ -38,7 +38,7 @@ SConscript(PathJoin(env['TSLOADPATH'], 'SConscript.etrace.py'), 'env')
 # ------------
 # MODULES
 
-modules = ['sched1']
+modules = ['sched1', 'http']
 
 for mod in modules:
     variant_dir = env.BuildDir(PathJoin('mbench', mod))

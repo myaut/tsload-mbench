@@ -1,0 +1,27 @@
+{
+	"name": "sched1",
+	"steps": {
+		"http": {
+			"num_steps":	10,
+			"num_requests": 20
+		}
+	},
+	"threadpools": {
+		"tp_http" : {
+			"num_threads": 20,
+			"quantum": 1000000000,
+			"disp_name": "simple"
+		}
+	},
+	"workloads" : {
+		"http" : {
+			"wltype": "http",
+			"threadpool": "tp_http",
+			"params": {
+				"server": "locahost",
+				"port": 80,
+				"url": "/"
+			}
+		}
+	}
+}
