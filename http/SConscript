@@ -8,7 +8,6 @@ Import('env')
 mod = env.Clone()
 
 module = mod.Module('load', target)
-mod.AddDeps(('lib', 'libtsagent'))
 
 experiment_json = File('experiment.json')
 

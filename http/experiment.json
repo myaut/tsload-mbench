@@ -8,9 +8,9 @@
 	},
 	"threadpools": {
 		"tp_http" : {
-			"num_threads": 20,
+			"num_threads": 12,
 			"quantum": 1000000000,
-			"disp_name": "simple"
+			"disp": "exponential"
 		}
 	},
 	"workloads" : {
@@ -18,7 +18,7 @@
 			"wltype": "http",
 			"threadpool": "tp_http",
 			"params": {
-				"server": "locahost",
+				"server": "localhost",
 				"port": 80,
 				"url": "/"
 			}
