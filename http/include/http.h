@@ -22,14 +22,8 @@ struct http_workload {
 	wlp_integer_t 	port;
 	wlp_string_t 	url[MAXURLLEN];
 
-	nsk_addr		clnt_addr;
-	nsk_host_entry  he;
-
 	int url_len;
 	int server_len;
-
-	long logged_step;
-	int logged_code;
 };
 
 

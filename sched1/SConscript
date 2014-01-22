@@ -1,6 +1,7 @@
 import os
 PathJoin = os.path.join
 
+tgtroot = 'tsload-mbench'
 target = 'sched1'
 
 Import('env')
@@ -15,8 +16,8 @@ sched1_stp = File('sched1.stp')
 mod.Depends(module, [experiment_json, sched1_stp])
 
 install_path = PathJoin(mod['INSTALL_VAR'], 'mbench', target)
-mod.InstallTarget(install_path, experiment_json)
+mod.InstallTarget(tgtroot, install_path, experiment_json)
                  
-installed_sched1_stp = mod.InstallTarget(install_path, sched1_stp)        
+installed_sched1_stp = mod.InstallTarget(tgtroot, install_path, sched1_stp)        
 if env.SupportedPlatform('posix'):
     mod.AddPostAction(installed_sched1_stp, mod.Chmod(str(installed_sched1_stp), 0750))
