@@ -1,0 +1,76 @@
+{
+	"name": "sap",
+	"steps": {
+		"bigmem": {
+			"num_steps":	10,
+			"num_requests": 200
+		}
+	},
+	"threadpools": {
+		"tp_bigmem" : {
+			"num_threads": 30,
+			"quantum": 2000000000,
+			"disp": {
+			 	"type": "random"
+			 }
+		}
+	},
+	"workloads" : {
+		"bigmem" : {
+			"wltype": "bigmem",
+			"threadpool": "tp_bigmem",
+			"params": {
+				"mempool_size": 1073741824,
+				"cycles": {
+					"randgen": {
+						"class": "lcg"
+					},
+					"randvar": {
+						"class": "exponential",
+						"rate": 1.25e-05
+					}
+				 },
+				 "step": {
+					"randgen": {
+						"class": "lcg"
+					}
+				 },
+				 "offset": {
+					"randgen": {
+						"class": "lcg"
+					}
+				 },
+				 "instruction": {
+					"randgen": {
+						"class": "lcg"
+					},
+					"pmap": [
+						{ "probability": 0.4,
+						  "value": "cmp" },
+						{ "probability": 0.45,
+						  "value": "sum" },
+						{ "probability": 0.15,
+						  "value": "mul" }
+					]
+				},
+				 "access": {
+					"randgen": {
+						"class": "lcg"
+					},
+					"pmap": [
+						{ "probability": 0.2,
+						  "value": "mm" },
+						{ "probability": 0.65,
+						  "value": "mr" },
+						{ "probability": 0.15,
+						  "value": "rr" }
+					]
+				} 
+			},
+			"disp": "iat",
+			"disp_params": {
+				"distribution": "exponential"
+			}
+		}
+	}
+}
