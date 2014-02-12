@@ -29,6 +29,9 @@ env['TSPROJECT'] = 'mbench'
 env['TSVERSION'] = '0.1'
 env['TSNAME'] =  'mbench-' + env['TSVERSION']
 
+# Append path to build tools
+sys.path.append(PathJoin(env['TSLOADPATH'], 'tools', 'build'))
+
 # Load tsload SConscripts
 SConscript(PathJoin(env['TSLOADPATH'], 'SConscript.env.py'), 'env')
 SConscript(PathJoin(env['TSLOADPATH'], 'SConscript.plat.py'), 'env')
@@ -38,7 +41,7 @@ SConscript(PathJoin(env['TSLOADPATH'], 'SConscript.etrace.py'), 'env')
 # ------------
 # MODULES
 
-modules = ['sched1', 'http']
+modules = ['http']
 
 for mod in modules:
     variant_dir = env.BuildDir(PathJoin('mbench', mod))

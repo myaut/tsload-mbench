@@ -2,13 +2,11 @@ import os
 PathJoin = os.path.join
 
 tgtroot = 'tsload-mbench'
-target = 'http'
+target = 'bigmem'
 
 Import('env')
 
 mod = env.Clone()
-
-mod.Append(LIBS = ['curl'])
 
 module = mod.Module('load', target)
 
