@@ -19,21 +19,20 @@
 #include <llc.h>
 
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include <stdlib.h>
 #include <string.h>
+
+#include <linux/perf_event.h>
+#include <sys/syscall.h>
+#include <asm/unistd.h>
 
 DECLARE_MODAPI_VERSION(MOD_API_VERSION);
 DECLARE_MOD_NAME("llc");
 DECLARE_MOD_TYPE(MOD_TSLOAD);
 
 MODEXPORT wlp_descr_t llc_params[] = {
-	{ WLP_INTEGER, WLPF_NO_FLAGS,
-		WLP_NO_RANGE(),
-		WLP_NO_DEFAULT(),
-		"num_wait_cycles",
-		"Number of cycles between memory accesses",
-		offsetof(struct llc_workload, num_cycles) },
 	{ WLP_INTEGER, WLPF_NO_FLAGS,
 		WLP_NO_RANGE(),
 		WLP_NO_DEFAULT(),
@@ -46,17 +45,51 @@ MODEXPORT wlp_descr_t llc_params[] = {
 		"cpu_object",
 		"Root CPU object where cache is located",
 		offsetof(struct llc_workload, cpu_object) },
+	{ WLP_FLOAT, WLPF_OPTIONAL,
+		WLP_NO_RANGE(),
+		WLP_FLOAT_DEFAULT(2.0),
+		"mem_size",
+		"Size of memory area in last level caches",
+		offsetof(struct llc_workload, mem_size) },
+	{ WLP_INTEGER, WLPF_REQUEST,
+		WLP_NO_RANGE(),
+		WLP_NO_DEFAULT(),
+		"offset",
+		"Randomly generated offset in memory area",
+		offsetof(struct llc_request, offset) },
+	{ WLP_INTEGER, WLPF_OUTPUT,
+		WLP_NO_RANGE(),
+		WLP_NO_DEFAULT(),
+		"cache_misses",
+		"Number of cache-misses during request",
+		offsetof(struct llc_request, cache_misses) },
 	{ WLP_NULL }
 };
 
 module_t* self = NULL;
 
+static size_t llc_page_size = 4096;
+
 static hi_cpu_object_t* get_last_level_cache(hi_cpu_object_t* parent, int* pcount, int* plevel);
+
+static inline int
+sys_perf_event_open(struct perf_event_attr *attr,
+		      pid_t pid, int cpu, int group_fd,
+		      unsigned long flags);
+static uint64_t rdpmc(unsigned int counter);
 
 MODEXPORT int llc_wl_config(workload_t* wl) {
 	struct llc_workload* llcw =
 				(struct llc_workload*) wl->wl_params;
 	struct llc_data* data;
+
+	struct perf_event_attr attr = {
+		.type = PERF_TYPE_HW_CACHE,
+		.config = PERF_COUNT_HW_CACHE_LL |
+				(PERF_COUNT_HW_CACHE_OP_READ		<<  8) |
+				(PERF_COUNT_HW_CACHE_RESULT_MISS	<< 16),
+		.exclude_kernel = 1,
+	};
 
 	size_t ll_cache_size;
 
@@ -74,9 +107,29 @@ MODEXPORT int llc_wl_config(workload_t* wl) {
 	ll_cache_size = cache->cache.c_size * count;
 
 	data = mp_malloc(sizeof(struct llc_data));
-	data->size = ll_cache_size / wl->wl_tp->tp_num_threads +
-					cache->cache.c_associativity * cache->cache.c_line_size;
+	data->size = llcw->mem_size * ll_cache_size;
 	data->line_size = cache->cache.c_line_size;
+	data->ptr = NULL;
+
+	data->perf_fd =  sys_perf_event_open(&attr, 0, -1, -1, 0);
+	if(data->perf_fd < 0) {
+		wl_notify(wl, WLS_CFG_FAIL, -1, "Failed to open perf fd memory!");
+		return 1;
+	}
+
+	data->perf_mem = mmap(NULL, llc_page_size, PROT_READ, MAP_SHARED, data->perf_fd, 0);
+	if(data->perf_mem == NULL) {
+		wl_notify(wl, WLS_CFG_FAIL, -1, "Failed to mmap perf fd memory!");
+		return 1;
+	}
+
+	data->ptr = (char*) mmap(NULL, data->size, PROT_READ | PROT_WRITE,
+							MAP_PRIVATE | MAP_ANON, -1, 0);
+
+	if(data->ptr == NULL) {
+		wl_notify(wl, WLS_CFG_FAIL, -1, "Failed to mmap memory!");
+		return 1;
+	}
 
 	logmsg(LOG_INFO, "wl: %s cache size per worker: %lu",
 			wl->wl_name, (unsigned long) data->size);
@@ -90,36 +143,65 @@ MODEXPORT int llc_wl_unconfig(workload_t* wl) {
 	struct llc_data* data =
 		(struct llc_data*) wl->wl_private;
 
+	munmap(data->ptr, data->size);
+	close(data->perf_fd);
+
 	mp_free(data);
 
 	return 0;
 }
 
+#define ASM_END				"\n"
+#define ASM_UNROLL8(expr)			\
+	expr 	expr 	expr	expr	\
+	expr 	expr 	expr	expr
+
 MODEXPORT int llc_run_request(request_t* rq) {
 	struct llc_workload* llcw =
 			(struct llc_workload*) rq->rq_workload->wl_params;
+	struct llc_request* llcrq =
+			(struct llc_request*) rq->rq_params;
 	struct llc_data* data =
 		(struct llc_data*) rq->rq_workload->wl_private;
 
-	char* ptr;
-	volatile int i, j, k;
-	volatile char c;
+	struct perf_event_mmap_page *pc = data->perf_mem;
 
-	ptr = (char*) mmap(NULL, data->size, PROT_READ | PROT_WRITE,
-				MAP_PRIVATE | MAP_ANON, -1, 0);
+	register uint32_t* ptr = (uint32_t*) data->ptr;
+	int i;
+	register int j;
+	register uint32_t c;
+
+	size_t size = data->size / sizeof(uint32_t);
+	size_t line_size = data->line_size / sizeof(uint32_t);
+
+	ptrdiff_t offset = (llcrq->offset % data->size);
+
+	llcrq->offset = offset;
+	offset /= sizeof(uint32_t);
+
+	llcrq->cache_misses = rdpmc(pc->index);
 
 	for(i = 0; i < llcw->num_accesses; ++i) {
-		for(j = 0; j < data->size; j += data->line_size) {
-			if(i == 0)
-				ptr[j] = 'x';
+		for(	j = offset;
+				(j < (size - 8 * line_size)) && (i < llcw->num_accesses);
+				j += line_size) {
+			asm volatile(
+				ASM_UNROLL8(
+					" add 0(%1), %0"	ASM_END
+					" add %2, %1"		ASM_END)
+					: "=r" (c)
+					: "r" (ptr + j),
+					  "r" (line_size));
 
-			c = ptr[j];
+			ptr[j] = c;
 
-			for(k = 0; k < llcw->num_cycles; ++k) ++c;
+			i += 8;
 		}
+
+		offset = 0;
 	}
 
-	munmap(ptr, data->size);
+	llcrq->cache_misses = rdpmc(pc->index) - llcrq->cache_misses;
 
 	return 0;
 }
@@ -131,6 +213,7 @@ wl_type_t llc_wlt = {
 
 	llc_params,						/* wlt_params */
 	sizeof(struct llc_workload),	/* wlt_params_size*/
+	sizeof(struct llc_request),		/* wlt_rqparams_size */
 
 	llc_wl_config,					/* wlt_wl_config */
 	llc_wl_unconfig,				/* wlt_wl_unconfig */
@@ -184,3 +267,25 @@ static hi_cpu_object_t* get_last_level_cache(hi_cpu_object_t* parent, int* pcoun
 	return cache;
 }
 
+static inline int
+sys_perf_event_open(struct perf_event_attr *attr,
+		      pid_t pid, int cpu, int group_fd,
+		      unsigned long flags)
+{
+	int fd;
+
+	fd = syscall(__NR_perf_event_open, attr, pid, cpu,
+		     group_fd, flags);
+
+	return fd;
+}
+
+
+static uint64_t rdpmc(unsigned int counter)
+{
+	unsigned int low, high;
+
+	asm volatile("rdpmc" : "=a" (low), "=d" (high) : "c" (counter));
+
+	return low | ((uint64_t)high) << 32;
+}

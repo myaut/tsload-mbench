@@ -29,6 +29,8 @@ env['TSPROJECT'] = 'mbench'
 env['TSVERSION'] = '0.1'
 env['TSNAME'] =  'mbench-' + env['TSVERSION']
 
+env['MACH'] = ''
+
 # Append path to build tools
 sys.path.append(PathJoin(env['TSLOADPATH'], 'tools', 'build'))
 
@@ -41,7 +43,7 @@ SConscript(PathJoin(env['TSLOADPATH'], 'SConscript.etrace.py'), 'env')
 # ------------
 # MODULES
 
-modules = ['http']
+modules = ['bigmem', 'llc']
 
 for mod in modules:
     variant_dir = env.BuildDir(PathJoin('mbench', mod))
