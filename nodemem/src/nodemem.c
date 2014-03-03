@@ -75,6 +75,7 @@ sys_perf_event_open(struct perf_event_attr *attr,
 		      pid_t pid, int cpu, int group_fd,
 		      unsigned long flags);
 static uint64_t rdpmc(unsigned int counter);
+static uint64_t read_counter(struct perf_event_mmap_page * pc);
 
 MODEXPORT int nodemem_wl_config(workload_t* wl) {
 	struct nodemem_workload* nodememw =
@@ -90,6 +91,7 @@ MODEXPORT int nodemem_wl_config(workload_t* wl) {
 				(PERF_COUNT_HW_CACHE_OP_READ		<<  8) |
 				(PERF_COUNT_HW_CACHE_RESULT_MISS	<< 16),
 		.exclude_kernel = 1,
+		.sample_period = 1000000
 	};
 
 	hi_cpu_object_t* remote_node = NULL;
@@ -109,12 +111,13 @@ MODEXPORT int nodemem_wl_config(workload_t* wl) {
 	}
 
 	data = mp_malloc(sizeof(struct nodemem_data));
-	data->pool_size = nodememw->num_accesses * nodemem_line_size / 2;
+	data->pool_size = nodememw->num_accesses * nodemem_line_size;
 	data->size = nodemem_pools_count * data->pool_size;
 	data->local_ptr = NULL;
 	data->remote_ptr = NULL;
 
-	data->perf_fd =  sys_perf_event_open(&attr, 0, -1, -1, 0);
+	data->perf_fd =  sys_perf_event_open(&attr, wl->wl_tp->tp_workers[0].w_thread.t_system_id,
+										 -1, -1, 0);
 	if(data->perf_fd < 0) {
 		wl_notify(wl, WLS_CFG_FAIL, -1, "Failed to open perf fd memory!");
 		return 1;
@@ -163,6 +166,8 @@ MODEXPORT int nodemem_wl_unconfig(workload_t* wl) {
 
 	munmap(data->local_ptr, data->size);
 	munmap(data->remote_ptr, data->size);
+
+	munmap(data->perf_mem, nodemem_page_size);
 	close(data->perf_fd);
 
 	mp_free(data);
@@ -201,7 +206,7 @@ MODEXPORT int nodemem_run_request(request_t* rq) {
 	nodememrq->offset = offset;
 	offset /= sizeof(uint32_t);
 
-	nodememrq->node_misses = rdpmc(pc->index);
+	nodememrq->node_misses = read_counter(pc);
 
 	for(i = 0; i < nodememw->num_accesses; ++i) {
 		if(++poolid == 2 * nodemem_pools_count)
@@ -235,7 +240,7 @@ MODEXPORT int nodemem_run_request(request_t* rq) {
 
 	}
 
-	nodememrq->node_misses = rdpmc(pc->index) - nodememrq->node_misses;
+	nodememrq->node_misses = read_counter(pc) - nodememrq->node_misses;
 
 	return 0;
 }
@@ -309,4 +314,26 @@ static uint64_t rdpmc(unsigned int counter)
 	asm volatile("rdpmc" : "=a" (low), "=d" (high) : "c" (counter));
 
 	return low | ((uint64_t)high) << 32;
+}
+
+#define barrier() asm volatile("" ::: "memory")
+
+static uint64_t read_counter(struct perf_event_mmap_page * pc) {
+	uint32_t seq;
+	uint32_t idx;
+	uint64_t count;
+
+	do {
+		seq = pc->lock;
+		barrier();
+
+		idx = pc->index;
+		count = pc->offset;
+		if (idx)
+			count += rdpmc(idx - 1);
+
+		barrier();
+	} while (pc->lock != seq);
+
+	return count;
 }

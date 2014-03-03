@@ -77,6 +77,7 @@ sys_perf_event_open(struct perf_event_attr *attr,
 		      pid_t pid, int cpu, int group_fd,
 		      unsigned long flags);
 static uint64_t rdpmc(unsigned int counter);
+static uint64_t read_counter(struct perf_event_mmap_page * pc);
 
 MODEXPORT int llc_wl_config(workload_t* wl) {
 	struct llc_workload* llcw =
@@ -111,7 +112,8 @@ MODEXPORT int llc_wl_config(workload_t* wl) {
 	data->line_size = cache->cache.c_line_size;
 	data->ptr = NULL;
 
-	data->perf_fd =  sys_perf_event_open(&attr, 0, -1, -1, 0);
+	data->perf_fd =  sys_perf_event_open(&attr, wl->wl_tp->tp_workers[0].w_thread.t_system_id,
+			-1, -1, 0);
 	if(data->perf_fd < 0) {
 		wl_notify(wl, WLS_CFG_FAIL, -1, "Failed to open perf fd memory!");
 		return 1;
@@ -131,9 +133,6 @@ MODEXPORT int llc_wl_config(workload_t* wl) {
 		return 1;
 	}
 
-	logmsg(LOG_INFO, "wl: %s cache size per worker: %lu",
-			wl->wl_name, (unsigned long) data->size);
-
 	wl->wl_private = (void*) data;
 
 	return 0;
@@ -144,6 +143,8 @@ MODEXPORT int llc_wl_unconfig(workload_t* wl) {
 		(struct llc_data*) wl->wl_private;
 
 	munmap(data->ptr, data->size);
+
+	munmap(data->perf_mem, llc_page_size);
 	close(data->perf_fd);
 
 	mp_free(data);
@@ -179,7 +180,7 @@ MODEXPORT int llc_run_request(request_t* rq) {
 	llcrq->offset = offset;
 	offset /= sizeof(uint32_t);
 
-	llcrq->cache_misses = rdpmc(pc->index);
+	llcrq->cache_misses = read_counter(pc);
 
 	for(i = 0; i < llcw->num_accesses; ++i) {
 		for(	j = offset;
@@ -201,7 +202,7 @@ MODEXPORT int llc_run_request(request_t* rq) {
 		offset = 0;
 	}
 
-	llcrq->cache_misses = rdpmc(pc->index) - llcrq->cache_misses;
+	llcrq->cache_misses = read_counter(pc) - llcrq->cache_misses;
 
 	return 0;
 }
@@ -288,4 +289,26 @@ static uint64_t rdpmc(unsigned int counter)
 	asm volatile("rdpmc" : "=a" (low), "=d" (high) : "c" (counter));
 
 	return low | ((uint64_t)high) << 32;
+}
+
+#define barrier() asm volatile("" ::: "memory")
+
+static uint64_t read_counter(struct perf_event_mmap_page * pc) {
+	uint32_t seq;
+	uint32_t idx;
+	uint64_t count;
+
+	do {
+		seq = pc->lock;
+		barrier();
+
+		idx = pc->index;
+		count = pc->offset;
+		if (idx)
+			count += rdpmc(idx - 1);
+
+		barrier();
+	} while (pc->lock != seq);
+
+	return count;
 }
