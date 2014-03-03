@@ -1,0 +1,21 @@
+import os
+PathJoin = os.path.join
+
+tgtroot = 'tsload-mbench'
+target = 'nodemem'
+
+Import('env')
+
+mod = env.Clone()
+
+mod.Append(LIBS = ['numa'])
+mod.Append(CCFLAGS = ['-O2'])
+
+module = mod.Module('load', target)
+
+experiment_json = File('experiment.json')
+
+mod.Depends(module, [experiment_json])
+
+install_path = PathJoin(mod['INSTALL_VAR'], 'mbench', target)
+mod.InstallTarget(tgtroot, install_path, experiment_json)

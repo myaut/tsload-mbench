@@ -1,0 +1,81 @@
+{
+	"name": "sched1",
+	"steps": {
+		"llc1": {
+			"num_steps":	10,
+			"num_requests": 12
+		},
+		"llc2": {
+			"num_steps":	10,
+			"num_requests": 12
+		}
+	},
+	"threadpools": {
+		"tp_llc1" : {
+			"num_threads": 6,
+			"quantum": 1000000000,
+			"disp_name": "exponential",
+			"bindings": [
+            	{ "tid": 0,
+            	  "objects": ["strand:0:0:0"] },
+            	{ "tid": 1,
+            	  "objects": ["strand:0:1:1"] },
+            	{ "tid": 2,
+            	  "objects": ["strand:0:2:2"] },
+            	{ "tid": 3,
+            	  "objects": ["strand:0:3:3"] },
+	        	{ "tid": 4,
+	        	  "objects": ["strand:0:4:4"] },
+	        	{ "tid": 5,
+	        	  "objects": ["strand:0:5:5"] }              	 
+            ]
+		},
+		"tp_llc2" : {
+			"num_threads": 6,
+			"quantum": 1000000000,
+			"disp_name": "exponential",
+			"bindings": [
+            	{ "tid": 0,
+            	  "objects": ["strand:0:0:0"] },
+            	{ "tid": 1,
+            	  "objects": ["strand:0:1:1"] },
+            	{ "tid": 2,
+            	  "objects": ["strand:0:2:2"] },
+            	{ "tid": 3,
+            	  "objects": ["strand:0:3:3"] },
+	        	{ "tid": 4,
+	        	  "objects": ["strand:0:4:4"] },
+	        	{ "tid": 5,
+	        	  "objects": ["strand:0:5:5"] }              	 
+            ]
+		}
+	},
+	"workloads" : {
+		"llc1" : {
+			"wltype": "llc",
+			"threadpool": "tp_llc1",
+			"disp": "iat",
+			"disp_params": {
+				"distribution": "exponential"
+			},
+			"params": {
+				"num_wait_cycles": 2000,
+				"num_accesses": 400,
+				"cpu_object": "chip:0"
+			}
+		},
+		"llc2" : {
+			"wltype": "llc",
+			"threadpool": "tp_llc2",
+			"disp": "iat",
+			"disp_params": {
+				"distribution": "exponential"
+			},
+			"params": {
+				"num_wait_cycles": 20000,
+				"num_accesses": 400,
+				"cpu_object": "chip:0"
+			}
+		}
+	}
+}
