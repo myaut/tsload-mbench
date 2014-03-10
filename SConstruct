@@ -43,7 +43,7 @@ SConscript(PathJoin(env['TSLOADPATH'], 'SConscript.etrace.py'), 'env')
 # ------------
 # MODULES
 
-modules = ['bigmem', 'llc', 'nodemem', 'smtmul']
+modules = ['bigmem', 'llc', 'nodemem', 'smtmul', 'tlb']
 
 for mod in modules:
     variant_dir = env.BuildDir(PathJoin('mbench', mod))

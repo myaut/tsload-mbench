@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <float.h>
 
 #include <linux/perf_event.h>
 #include <sys/syscall.h>
@@ -41,6 +42,12 @@ MODEXPORT wlp_descr_t nodemem_params[] = {
 		"num_accesses",
 		"Number of memory accesses per request",
 		offsetof(struct nodemem_workload, num_accesses) },
+	{ WLP_INTEGER, WLPF_NO_FLAGS,
+		WLP_NO_RANGE(),
+		WLP_NO_DEFAULT(),
+		"num_pools",
+		"Number of memory pools",
+		offsetof(struct nodemem_workload, num_pools) },
 	{ WLP_CPU_OBJECT, WLPF_NO_FLAGS,
 		WLP_NO_RANGE(),
 		WLP_NO_DEFAULT(),
@@ -53,6 +60,18 @@ MODEXPORT wlp_descr_t nodemem_params[] = {
 		"offset",
 		"Randomly generated offset in memory area",
 		offsetof(struct nodemem_request, offset) },
+	{ WLP_INTEGER, WLPF_REQUEST,
+		WLP_NO_RANGE(),
+		WLP_NO_DEFAULT(),
+		"pool_id",
+		"ID of pool for this request",
+		offsetof(struct nodemem_request, pool_id) },
+	{ WLP_FLOAT, WLPF_REQUEST,
+		WLP_NO_RANGE(),
+		WLP_NO_DEFAULT(),
+		"local_to_remote",
+		"Local/remote mem accesses ratio",
+		offsetof(struct nodemem_request, local_to_remote) },
 	{ WLP_INTEGER, WLPF_OUTPUT,
 		WLP_NO_RANGE(),
 		WLP_NO_DEFAULT(),
@@ -64,9 +83,9 @@ MODEXPORT wlp_descr_t nodemem_params[] = {
 
 module_t* self = NULL;
 
-size_t nodemem_line_size = 64;		/* FIXME: Should be taken from llc */
-size_t nodemem_page_size = 4096;
-size_t nodemem_pools_count = 8;		/* FIXME: Maybe a wlparam or dependent on llc size */
+static size_t nodemem_line_size = 64;		/* FIXME: Should be taken from llc */
+static size_t nodemem_tlb_size = 512;
+static size_t nodemem_page_size = 4096;
 
 static hi_cpu_object_t* find_remote_node(hi_cpu_object_t* local_node);
 
@@ -84,14 +103,14 @@ MODEXPORT int nodemem_wl_config(workload_t* wl) {
 
 	int ret;
 	unsigned long nodemask;
+	ptrdiff_t j;
 
 	struct perf_event_attr attr = {
 		.type = PERF_TYPE_HW_CACHE,
 		.config = PERF_COUNT_HW_CACHE_NODE |
 				(PERF_COUNT_HW_CACHE_OP_READ		<<  8) |
 				(PERF_COUNT_HW_CACHE_RESULT_MISS	<< 16),
-		.exclude_kernel = 1,
-		.sample_period = 1000000
+		.exclude_kernel = 1
 	};
 
 	hi_cpu_object_t* remote_node = NULL;
@@ -111,8 +130,8 @@ MODEXPORT int nodemem_wl_config(workload_t* wl) {
 	}
 
 	data = mp_malloc(sizeof(struct nodemem_data));
-	data->pool_size = nodememw->num_accesses * nodemem_line_size;
-	data->size = nodemem_pools_count * data->pool_size;
+	data->pool_size = nodememw->num_accesses * nodemem_page_size;
+	data->size = nodememw->num_pools * data->pool_size;
 	data->local_ptr = NULL;
 	data->remote_ptr = NULL;
 
@@ -130,14 +149,17 @@ MODEXPORT int nodemem_wl_config(workload_t* wl) {
 	}
 
 	data->local_ptr = (char*) mmap(NULL, data->size, PROT_READ | PROT_WRITE,
-									MAP_PRIVATE | MAP_ANON, -1, 0);
+									MAP_PRIVATE | MAP_ANON , -1, 0);
 	data->remote_ptr = (char*) mmap(NULL, data->size, PROT_READ | PROT_WRITE,
-									MAP_PRIVATE | MAP_ANON, -1, 0);
+									MAP_PRIVATE | MAP_ANON , -1, 0);
 
 	if(data->local_ptr == NULL || data->remote_ptr == NULL) {
 		wl_notify(wl, WLS_CFG_FAIL, -1, "Failed to mmap memory!");
 		return 1;
 	}
+
+	madvise(data->local_ptr, data->size, MADV_HUGEPAGE);
+	madvise(data->remote_ptr, data->size, MADV_HUGEPAGE);
 
 	nodemask = 1 << nodememw->node_object->id;
 	ret = mbind(data->local_ptr, data->size, MPOL_BIND, &nodemask,
@@ -153,6 +175,11 @@ MODEXPORT int nodemem_wl_config(workload_t* wl) {
 	if(ret != 0) {
 		wl_notify(wl, WLS_CFG_FAIL, -1, "Failed to mbind remote memory: %d!", errno);
 		return 1;
+	}
+
+	for(j = 0; j < data->size; j += nodemem_page_size) {
+		*(((char*) data->local_ptr) + j) = 's';
+		*(((char*) data->remote_ptr) + j) = 'q';
 	}
 
 	wl->wl_private = (void*) data;
@@ -190,54 +217,75 @@ MODEXPORT int nodemem_run_request(request_t* rq) {
 
 	struct perf_event_mmap_page *pc = data->perf_mem;
 
-	register uint32_t* ptr = NULL;
+	register uint32_t* ptr;
 	int i;
-	register int j;
+	register ptrdiff_t j;
 	register uint32_t c;
 
-	int poolid = (nodememrq->offset / data->pool_size) % (2 * nodemem_pools_count);
-
+	int poolid = 0;
 	size_t size = data->pool_size / sizeof(uint32_t);
-	size_t block_size = (8 * nodemem_line_size) / sizeof(uint32_t);
+	size_t line_size = (nodemem_line_size) / sizeof(uint32_t);
+	size_t page_size = (nodemem_page_size) / sizeof(uint32_t);
 
-	ptrdiff_t offset = nodememrq->offset % data->pool_size;
-	ptrdiff_t pool_offset;
+	ptrdiff_t remote_step;
+	ptrdiff_t local_step;
+	ptrdiff_t step;
+	ptrdiff_t offset;
 
-	nodememrq->offset = offset;
-	offset /= sizeof(uint32_t);
+	double a;
+
+	nodememrq->pool_id %= nodememw->num_pools;
+	if(nodememrq->pool_id < 0)
+		nodememrq->pool_id = -nodememrq->pool_id;
+
+	nodememrq->offset %= nodemem_page_size;
+	offset = nodememrq->offset / sizeof(uint32_t);
+
+	if(nodememrq->local_to_remote == 0.0 || nodememrq->local_to_remote == 1.0) {
+		local_step = page_size;
+		remote_step = page_size;
+	}
+	else {
+		a = nodememrq->local_to_remote;
+
+		local_step  = ((ptrdiff_t) ((1 / (1 - a)) * page_size)) % size;
+		remote_step = ((ptrdiff_t) ((1 / a) * page_size)) % size;
+	}
 
 	nodememrq->node_misses = read_counter(pc);
 
-	for(i = 0; i < nodememw->num_accesses; ++i) {
-		if(++poolid == 2 * nodemem_pools_count)
-			poolid = 0;
-
-		pool_offset = (poolid / 2) * size;
-		if(poolid & 1) {
-			ptr = ((uint32_t*) data->remote_ptr) + pool_offset;
+	for(i = 0; i < nodememw->num_accesses; ) {
+		if(poolid++ & 1) {
+			ptr = (uint32_t*) data->remote_ptr;
+			step = remote_step;
 		}
 		else {
-			ptr = ((uint32_t*) data->local_ptr) + pool_offset;
+			ptr = (uint32_t*) data->local_ptr;
+			step = local_step;
 		}
+		ptr += size * nodememrq->pool_id;
 
-		for(	j = offset;
-				(j < (size - block_size)) && (i < nodememw->num_accesses);
-				j += block_size) {
+		if(size < (8 * step + page_size))
+			continue;
+
+		for(	j = 0 ;
+				(j < (size - (8 * step + page_size))) && (i < nodememw->num_accesses);
+				j += 8 * step) {
 			asm volatile(
 				ASM_UNROLL8(
 					" add 0(%1), %0"	ASM_END
 					" add %2, %1"		ASM_END)
 					: "=a" (c)
-					: "d" (ptr + j),
-					  "c" (nodemem_line_size));
+					: "d" (ptr + j + offset),
+					  "c" (step));
 
 			i += 8;
-			ptr[j] = c;
 		}
 
-		offset = 0;
-
-
+		offset += line_size;
+		if(offset >= page_size) {
+			offset = 0;
+		}
 	}
 
 	nodememrq->node_misses = read_counter(pc) - nodememrq->node_misses;

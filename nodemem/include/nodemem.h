@@ -15,11 +15,14 @@
 
 struct nodemem_workload {
 	wlp_integer_t num_accesses;
+	wlp_integer_t num_pools;
 
 	hi_cpu_object_t* node_object;
 };
 
 struct nodemem_request {
+	wlp_float_t   local_to_remote;
+	wlp_integer_t pool_id;
 	wlp_integer_t offset;
 	wlp_integer_t node_misses;
 };

@@ -127,6 +127,7 @@ MODEXPORT int llc_wl_config(workload_t* wl) {
 
 	data->ptr = (char*) mmap(NULL, data->size, PROT_READ | PROT_WRITE,
 							MAP_PRIVATE | MAP_ANON, -1, 0);
+	madvise(data->ptr, data->size, MADV_HUGEPAGE);
 
 	if(data->ptr == NULL) {
 		wl_notify(wl, WLS_CFG_FAIL, -1, "Failed to mmap memory!");
@@ -182,7 +183,7 @@ MODEXPORT int llc_run_request(request_t* rq) {
 
 	llcrq->cache_misses = read_counter(pc);
 
-	for(i = 0; i < llcw->num_accesses; ++i) {
+	for(i = 0; i < llcw->num_accesses; ) {
 		for(	j = offset;
 				(j < (size - 8 * line_size)) && (i < llcw->num_accesses);
 				j += line_size) {
