@@ -1,0 +1,43 @@
+{
+	"name": "tlb-basis",
+	"steps": {
+		"tlb": {
+			"num_steps":	600,
+			"num_requests": 50
+		}
+	},
+	"threadpools": {
+		"tp_tlb": {
+			"num_threads": 1,
+			"quantum": 1000000000,
+			"disp": { "type": "round-robin" },
+			"sched": [
+				{ "wid": 0,
+				  "objects": [ "core:0:0" ] }
+			]
+		}
+	},
+	"workloads": {
+		"tlb": {
+			"wltype": "tlb",
+			"threadpool": "tp_tlb",
+			"rqsched": {
+				"type": "iat",
+				"distribution": "exponential"
+			},
+			"params": {
+				"num_accesses": 1600000,
+				"step" : {
+					"randgen": {
+						"class": "lcg"
+					}
+				},
+				"offset" : {
+                                        "randgen": {
+                                                "class": "lcg"
+                                        }
+                                }
+			}
+		}
+	}
+}

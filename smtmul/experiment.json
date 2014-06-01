@@ -1,0 +1,61 @@
+{
+	"name": "smtmul-basis",
+	"steps": {
+		"smt1": {
+			"num_steps":	600,
+			"num_requests": 50
+		},
+		"smt2": {
+                        "num_steps":    600,
+                        "num_requests": 50
+                }
+	},
+	"threadpools": {
+		"tp_smt1": {
+			"num_threads": 1,
+			"quantum": 1000000000,
+			"disp": { "type": "round-robin" },
+			"sched": [
+				{ "wid": 0,
+				  "objects": [ "strand:0:0:0" ] }
+			]
+		},
+		"tp_smt2": {
+                        "num_threads": 1,
+                        "quantum": 1000000000,
+                        "disp": { "type": "round-robin" },
+                        "sched": [
+                                { "wid": 0,
+                                  "objects": [ "strand:0:0:12" ] }
+                        ]
+                }
+	},
+	"workloads": {
+		"smt1": {
+			"wltype": "smtmul",
+			"threadpool": "tp_smt1",
+			"rqsched": {
+				"type": "iat",
+				"distribution": "uniform",
+				"scope": 0.01
+			},
+			"params": {
+				"num_instructions": 1000000,
+				"enable_perf": true
+			}
+		},
+		"smt2": {
+                        "wltype": "smtmul",
+                        "threadpool": "tp_smt2",
+                        "rqsched": {
+                                "type": "iat",
+                                "distribution": "uniform",
+				"scope": 0.01
+                        },
+                        "params": {
+                                "num_instructions": 1000000,
+				"enable_perf": false
+                        }
+                }
+	}
+}

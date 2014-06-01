@@ -1,80 +1,38 @@
 {
-	"name": "sched1",
+	"name": "llc-basis",
 	"steps": {
-		"llc1": {
-			"num_steps":	10,
-			"num_requests": 12
-		},
-		"llc2": {
-			"num_steps":	10,
-			"num_requests": 12
+		"llc": {
+			"num_steps":	600,
+			"num_requests": 50
 		}
 	},
 	"threadpools": {
-		"tp_llc1" : {
-			"num_threads": 6,
+		"tp_llc": {
+			"num_threads": 1,
 			"quantum": 1000000000,
-			"disp_name": "exponential",
-			"bindings": [
-            	{ "tid": 0,
-            	  "objects": ["strand:0:0:0"] },
-            	{ "tid": 1,
-            	  "objects": ["strand:0:1:1"] },
-            	{ "tid": 2,
-            	  "objects": ["strand:0:2:2"] },
-            	{ "tid": 3,
-            	  "objects": ["strand:0:3:3"] },
-	        	{ "tid": 4,
-	        	  "objects": ["strand:0:4:4"] },
-	        	{ "tid": 5,
-	        	  "objects": ["strand:0:5:5"] }              	 
-            ]
-		},
-		"tp_llc2" : {
-			"num_threads": 6,
-			"quantum": 1000000000,
-			"disp_name": "exponential",
-			"bindings": [
-            	{ "tid": 0,
-            	  "objects": ["strand:0:0:0"] },
-            	{ "tid": 1,
-            	  "objects": ["strand:0:1:1"] },
-            	{ "tid": 2,
-            	  "objects": ["strand:0:2:2"] },
-            	{ "tid": 3,
-            	  "objects": ["strand:0:3:3"] },
-	        	{ "tid": 4,
-	        	  "objects": ["strand:0:4:4"] },
-	        	{ "tid": 5,
-	        	  "objects": ["strand:0:5:5"] }              	 
-            ]
+			"disp": { "type": "round-robin" },
+			"sched": [
+				{ "wid": 0,
+				  "objects": [ "chip:0" ] }
+			]
 		}
 	},
-	"workloads" : {
-		"llc1" : {
+	"workloads": {
+		"llc": {
 			"wltype": "llc",
-			"threadpool": "tp_llc1",
-			"disp": "iat",
-			"disp_params": {
+			"threadpool": "tp_llc",
+			"rqsched": {
+				"type": "iat",
 				"distribution": "exponential"
 			},
 			"params": {
-				"num_wait_cycles": 2000,
-				"num_accesses": 400,
-				"cpu_object": "chip:0"
-			}
-		},
-		"llc2" : {
-			"wltype": "llc",
-			"threadpool": "tp_llc2",
-			"disp": "iat",
-			"disp_params": {
-				"distribution": "exponential"
-			},
-			"params": {
-				"num_wait_cycles": 20000,
-				"num_accesses": 400,
-				"cpu_object": "chip:0"
+				"num_accesses": 1500000,
+				"cpu_object": "chip:0",
+				"offset" : {
+					"randgen": {
+						"class": "lcg"
+					}
+				}
 			}
 		}
 	}
